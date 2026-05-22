@@ -162,6 +162,15 @@ class SaveManager:
         backups.sort(key=lambda x: x["modified_time"], reverse=True)
         return backups
 
+    @staticmethod
+    def sanitize_backup_name(backup_name: str, max_len: int = 180) -> str:
+        """清理备份文件名并限制长度（不含 .sl2）。"""
+        name = re.sub(r'[<>:"/\\|?*]', '_', backup_name.strip())
+        name = re.sub(r'\s+', '_', name)
+        if len(name) > max_len:
+            name = name[:max_len].rstrip('_')
+        return name or datetime.now().strftime("%Y%m%d_%H%M%S")
+
     def backup_save(self, steam_id: str, backup_name: str = "") -> tuple:
         """备份存档"""
         save_path = self.get_save_path(steam_id)
@@ -171,7 +180,7 @@ class SaveManager:
         if not backup_name:
             backup_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        backup_name = re.sub(r'[<>:"/\\|?*]', '_', backup_name)
+        backup_name = self.sanitize_backup_name(backup_name)
         backup_dir = os.path.join(self.BACKUP_DIR, steam_id)
         os.makedirs(backup_dir, exist_ok=True)
 
@@ -184,6 +193,23 @@ class SaveManager:
             return True, f"备份成功: {backup_name}"
         except Exception as e:
             return False, f"备份失败: {e}"
+
+    def backup_save_unique(
+        self, steam_id: str, backup_name: str
+    ) -> tuple[bool, str, str]:
+        """备份存档；若同名已存在则自动追加序号。"""
+        base = self.sanitize_backup_name(backup_name)
+        for suffix in range(100):
+            name = base if suffix == 0 else f"{base}_{suffix}"
+            ok, msg = self.backup_save(steam_id, name)
+            if ok:
+                path = os.path.join(
+                    self.BACKUP_DIR, steam_id, f"{name}.sl2"
+                )
+                return True, msg, path
+            if "已存在同名" not in msg:
+                return False, msg, ""
+        return False, "无法生成唯一备份名", ""
 
     def restore_save(self, steam_id: str, backup_path: str) -> tuple:
         """恢复存档"""

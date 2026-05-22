@@ -5,8 +5,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QScrollArea)
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
-from qfluentwidgets import (CardWidget, SwitchButton, LineEdit,
+from qfluentwidgets import (CardWidget, SwitchButton, LineEdit, ComboBox,
                            PrimaryPushButton, PushButton, InfoBar, InfoBarPosition)
+from core.match_config import get_required_positive_matches
 import json
 import os
 import shutil
@@ -158,19 +159,21 @@ class SettingsPage(QWidget):
         favorited_layout.addStretch()
         card_layout.addLayout(favorited_layout)
 
-        # 三有效模式
+        # 正面匹配模式
         valid_layout = QHBoxLayout()
-        valid_label = QLabel("三有效模式:")
+        valid_label = QLabel("正面匹配模式:")
         valid_label.setFixedWidth(150)
-        self.require_double_switch = SwitchButton()
-        self.require_double_switch.setChecked(not self.settings.get("require_double_valid", True))
-        self.require_double_switch.checkedChanged.connect(self._auto_save_settings)
+        self.repo_valid_combo = ComboBox()
+        self.repo_valid_combo.addItems(["单有效（1条）", "双有效（2条）", "三有效（3条）"])
+        self.repo_valid_combo.setCurrentIndex(
+            get_required_positive_matches(self.settings, for_shop=False) - 1
+        )
+        self.repo_valid_combo.currentIndexChanged.connect(self._auto_save_settings)
         valid_layout.addWidget(valid_label)
-        valid_layout.addWidget(self.require_double_switch)
+        valid_layout.addWidget(self.repo_valid_combo)
         valid_layout.addStretch()
 
-        # 说明文本
-        valid_desc = QLabel("开启: 3条词条匹配才合格 | 关闭: 2条词条匹配即合格")
+        valid_desc = QLabel("白名单正面词条需匹配的数量；深夜黑名单仍会一票否决")
         valid_desc.setFont(QFont("Segoe UI", 8))
         valid_desc.setStyleSheet("color: gray;")
         card_layout.addLayout(valid_layout)
@@ -190,23 +193,43 @@ class SettingsPage(QWidget):
         title.setStyleSheet("font-size: 16pt; font-weight: bold;")
         card_layout.addWidget(title)
 
-        # 三有效模式
         shop_valid_layout = QHBoxLayout()
-        shop_valid_label = QLabel("三有效模式:")
+        shop_valid_label = QLabel("正面匹配模式:")
         shop_valid_label.setFixedWidth(150)
-        self.shop_require_double_switch = SwitchButton()
-        self.shop_require_double_switch.setChecked(not self.settings.get("shop_require_double_valid", True))
-        self.shop_require_double_switch.checkedChanged.connect(self._auto_save_settings)
+        self.shop_valid_combo = ComboBox()
+        self.shop_valid_combo.addItems(["单有效（1条）", "双有效（2条）", "三有效（3条）"])
+        self.shop_valid_combo.setCurrentIndex(
+            get_required_positive_matches(self.settings, for_shop=True) - 1
+        )
+        self.shop_valid_combo.currentIndexChanged.connect(self._auto_save_settings)
         shop_valid_layout.addWidget(shop_valid_label)
-        shop_valid_layout.addWidget(self.shop_require_double_switch)
+        shop_valid_layout.addWidget(self.shop_valid_combo)
         shop_valid_layout.addStretch()
 
-        # 说明文本
-        shop_valid_desc = QLabel("开启: 3条词条匹配才合格 | 关闭: 2条词条匹配即合格")
+        shop_valid_desc = QLabel("与仓库清理独立设置；单有效时命中1条白名单正面即可合格")
         shop_valid_desc.setFont(QFont("Segoe UI", 8))
         shop_valid_desc.setStyleSheet("color: gray;")
         card_layout.addLayout(shop_valid_layout)
         card_layout.addWidget(shop_valid_desc)
+
+        full_auto_layout = QHBoxLayout()
+        full_auto_label = QLabel("完全自动化:")
+        full_auto_label.setFixedWidth(150)
+        self.shop_full_auto_switch = SwitchButton()
+        self.shop_full_auto_switch.setChecked(
+            self.settings.get("shop_full_auto_nav", False)
+        )
+        self.shop_full_auto_switch.checkedChanged.connect(self._auto_save_settings)
+        full_auto_layout.addWidget(full_auto_label)
+        full_auto_layout.addWidget(self.shop_full_auto_switch)
+        full_auto_layout.addStretch()
+        full_auto_desc = QLabel(
+            "开启后：自动导航进商店；暗痕低于停止值时自动读档并重试（需 Steam 存档）。按 0 停止。"
+        )
+        full_auto_desc.setFont(QFont("Segoe UI", 8))
+        full_auto_desc.setStyleSheet("color: gray;")
+        card_layout.addLayout(full_auto_layout)
+        card_layout.addWidget(full_auto_desc)
 
         return card
 
@@ -492,8 +515,9 @@ class SettingsPage(QWidget):
         """默认设置"""
         return {
             "allow_operate_favorited": False,
-            "require_double_valid": True,
-            "shop_require_double_valid": True,
+            "repo_positive_matches": 2,
+            "shop_positive_matches": 2,
+            "shop_full_auto_nav": False,
             "steam_path": r"C:\Program Files (x86)\Steam",
             "ocr_debug": False,
             "template_threshold": 0.7,
@@ -508,8 +532,9 @@ class SettingsPage(QWidget):
 
         self.settings = {
             "allow_operate_favorited": self.allow_favorited_switch.isChecked(),
-            "require_double_valid": not self.require_double_switch.isChecked(),
-            "shop_require_double_valid": not self.shop_require_double_switch.isChecked(),
+            "repo_positive_matches": self.repo_valid_combo.currentIndex() + 1,
+            "shop_positive_matches": self.shop_valid_combo.currentIndex() + 1,
+            "shop_full_auto_nav": self.shop_full_auto_switch.isChecked(),
             "steam_path": self.steam_path_input.text(),
             "ocr_debug": self.ocr_debug_switch.isChecked() if hasattr(self, 'ocr_debug_switch') else self.settings.get("ocr_debug", False),
             "template_threshold": self._get_threshold_value(),
@@ -559,7 +584,7 @@ class SettingsPage(QWidget):
         self.settings = {
             "game_window_title": self.window_title_input.text(),
             "allow_operate_favorited": self.allow_favorited_switch.isChecked(),
-            "require_double_valid": not self.require_double_switch.isChecked(),
+            "repo_positive_matches": self.repo_valid_combo.currentIndex() + 1,
             "steam_path": self.steam_path_input.text()
         }
 

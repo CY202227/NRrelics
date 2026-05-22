@@ -11,6 +11,7 @@ import pydirectinput
 import pygetwindow as gw
 from typing import Dict, List, Optional
 
+from core.match_config import cannot_meet_match_requirement
 from core.preset_manager import PresetManager
 from core.ocr_engine import OCREngine
 from core.relic_detector import RelicDetector, RELIC_STATE_LIGHT, RELIC_STATE_DARK_F, RELIC_STATE_DARK_FE, RELIC_STATE_DARK_E, RELIC_STATE_DARK_O
@@ -72,7 +73,7 @@ class RepoCleaner:
         self.qualified_relics = []
 
     def start_cleaning(self, mode: str, cleaning_mode: str, max_relics: int,
-                      allow_operate_favorited: bool, require_double: bool,
+                      allow_operate_favorited: bool, required_matches: int,
                       log_callback=None):
         """
         开始清理
@@ -82,7 +83,7 @@ class RepoCleaner:
             cleaning_mode: 清理模式 ("sell" 或 "favorite")
             max_relics: 最大检测数量 (0=无限)
             allow_operate_favorited: 是否允许对被收藏遗物操作
-            require_double: 双有效模式 (True=2条匹配, False=3条匹配)
+            required_matches: 白名单正面匹配条数（1=单有效，2=双有效，3=三有效）
             log_callback: 日志回调函数
         """
         self.is_running = True
@@ -292,7 +293,7 @@ class RepoCleaner:
                     general_preset,
                     dedicated_presets,
                     blacklist_preset,
-                    require_double
+                    required_matches
                 )
                 t_match = time.time() - t_start
 
@@ -457,7 +458,7 @@ class RepoCleaner:
 
     def _match_affixes(self, ocr_result: Dict, general_preset: Dict,
                       dedicated_presets: List[Dict], blacklist_preset: Optional[Dict],
-                      require_double: bool) -> Dict:
+                      required_matches: int) -> Dict:
         """
         匹配词条
 
@@ -473,11 +474,11 @@ class RepoCleaner:
         pos_affixes = [a for a in ocr_result["affixes"] if a["is_positive"]]
         neg_affixes = [a for a in ocr_result["affixes"] if not a["is_positive"]]
 
-        # 1. 单正面词条检查
-        if len(pos_affixes) == 1:
+        # 1. 正面词条数量不足以满足匹配要求
+        if cannot_meet_match_requirement(len(pos_affixes), required_matches):
             return {
                 "qualified": False,
-                "reason": "single_positive",
+                "reason": "insufficient_positive_affixes",
                 "positive_matches": 0,
                 "negative_matches": 0,
                 "details": []
@@ -502,7 +503,6 @@ class RepoCleaner:
                 }
 
         # 3. 白名单匹配（通用 + 任一一套专用）
-        required_matches = 2 if require_double else 3
         best_match = {"count": 0, "preset": None, "details": []}
 
         # 通用 + 每套专用逐一尝试

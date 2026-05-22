@@ -99,14 +99,14 @@ class CleaningThread(QThread):
     finished_signal = Signal()
     qualified_relic_signal = Signal(dict)  # 合格遗物信息
 
-    def __init__(self, cleaner, mode, cleaning_mode, max_relics, allow_favorited, require_double):
+    def __init__(self, cleaner, mode, cleaning_mode, max_relics, allow_favorited, required_matches):
         super().__init__()
         self.cleaner = cleaner
         self.mode = mode
         self.cleaning_mode = cleaning_mode
         self.max_relics = max_relics
         self.allow_favorited = allow_favorited
-        self.require_double = require_double
+        self.required_matches = required_matches
 
     def run(self):
         """运行清理"""
@@ -116,7 +116,7 @@ class CleaningThread(QThread):
                 self.cleaning_mode,
                 self.max_relics,
                 self.allow_favorited,
-                self.require_double,
+                self.required_matches,
                 log_callback=self.log_signal.emit
             )
 
@@ -772,7 +772,9 @@ class RepoPage(QWidget):
 
         # 从设置获取参数
         allow_favorited = self.settings.get("allow_operate_favorited", False)
-        require_double = self.settings.get("require_double_valid", True)
+        from core.match_config import get_required_positive_matches
+
+        required_matches = get_required_positive_matches(self.settings, for_shop=False)
 
         # 清空日志和遗物列表
         self.logger.clear()
@@ -792,7 +794,7 @@ class RepoPage(QWidget):
 
         # 创建并启动线程
         self.cleaning_thread = CleaningThread(
-            self.repo_cleaner, mode, cleaning_mode, max_relics, allow_favorited, require_double
+            self.repo_cleaner, mode, cleaning_mode, max_relics, allow_favorited, required_matches
         )
         self.cleaning_thread.log_signal.connect(self._on_log)
         self.cleaning_thread.finished_signal.connect(self._on_cleaning_finished)
@@ -908,7 +910,7 @@ class RepoPage(QWidget):
             return {
 
                 "allow_operate_favorited": False,
-                "require_double_valid": True
+                "repo_positive_matches": 2
             }
 
         try:
@@ -917,7 +919,7 @@ class RepoPage(QWidget):
         except:
             return {
                 "allow_operate_favorited": False,
-                "require_double_valid": True
+                "repo_positive_matches": 2
             }
 
     def _load_sold_relics(self) -> list:

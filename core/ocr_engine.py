@@ -744,7 +744,12 @@ class OCREngine:
             "success": False
         }
 
-    def recognize_with_classification_from_lines(self, line_images: list, mode: str = "normal") -> dict:
+    def recognize_with_classification_from_lines(
+        self,
+        line_images: list,
+        mode: str = "normal",
+        max_retry: int | None = None,
+    ) -> dict:
         """
         从6行图像执行OCR识别并分类词条（正面/负面）
         支持重试机制：如果识别不到任何词条库内的词条，最多重试3次
@@ -752,6 +757,7 @@ class OCREngine:
         Args:
             line_images: 6个单行图像的列表
             mode: 模式 ("normal" 或 "deepnight")
+            max_retry: 覆盖 CORRECTION_CONFIG 中的重试次数
 
         Returns:
             与 recognize_with_classification 相同的格式
@@ -761,7 +767,8 @@ class OCREngine:
             log_debug(f"[词条库切换] {self.current_mode} -> {mode}")
             self.load_vocabulary(mode)
 
-        max_retry = CORRECTION_CONFIG.get("max_retry", 3)
+        if max_retry is None:
+            max_retry = CORRECTION_CONFIG.get("max_retry", 3)
 
         for retry in range(max_retry):
             start_time = time.time()

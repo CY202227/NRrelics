@@ -10,7 +10,8 @@ from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont, QIntValidator
 import keyboard
 from qfluentwidgets import (CardWidget, PrimaryPushButton, PushButton,
-                           ComboBox, MessageBox, InfoBar, InfoBarPosition)
+                           ComboBox, MessageBox, InfoBar, InfoBarPosition,
+                           SwitchButton)
 
 from core.preset_manager import PresetManager, PRESET_TYPE_NORMAL_WHITELIST, PRESET_TYPE_DEEPNIGHT_WHITELIST
 from ui.components.logger_widget import LoggerWidget
@@ -31,20 +32,22 @@ class ShopThread(QThread):
     qualified_relic_signal = Signal(dict)  # 合格遗物信息
     stats_signal = Signal(dict)  # 统计信息
 
-    def __init__(self, shop_automation, mode, version, stop_currency, require_double,
+    def __init__(self, shop_automation, mode, version, stop_currency, required_matches,
                  sl_mode_enabled=False, sl_qualified_target=0,
-                 save_manager=None, steam_id="", backup_path=""):
+                 save_manager=None, steam_id="", backup_path="",
+                 full_auto_nav=False):
         super().__init__()
         self.shop_automation = shop_automation
         self.mode = mode
         self.version = version
         self.stop_currency = stop_currency
-        self.require_double = require_double
+        self.required_matches = required_matches
         self.sl_mode_enabled = sl_mode_enabled
         self.sl_qualified_target = sl_qualified_target
         self.save_manager = save_manager
         self.steam_id = steam_id
         self.backup_path = backup_path
+        self.full_auto_nav = full_auto_nav
 
     def run(self):
         """运行商店购买"""
@@ -53,14 +56,15 @@ class ShopThread(QThread):
                 self.mode,
                 self.version,
                 self.stop_currency,
-                self.require_double,
+                self.required_matches,
                 log_callback=self.log_signal.emit,
                 stats_callback=self.stats_signal.emit,
                 sl_mode_enabled=self.sl_mode_enabled,
                 sl_qualified_target=self.sl_qualified_target,
                 save_manager=self.save_manager,
                 steam_id=self.steam_id,
-                backup_path=self.backup_path
+                backup_path=self.backup_path,
+                full_auto_nav=self.full_auto_nav,
             )
 
             # 购买完成后，发送所有合格遗物信息
@@ -139,6 +143,26 @@ class PageShop(QWidget):
         """外部更新设置（由设置页面信号触发）"""
         self.settings = settings
         self._update_stop_condition_ui()
+        if hasattr(self, "full_auto_switch"):
+            self.full_auto_switch.blockSignals(True)
+            self.full_auto_switch.setChecked(settings.get("shop_full_auto_nav", False))
+            self.full_auto_switch.blockSignals(False)
+
+    def _save_full_auto_setting(self, checked: bool):
+        """保存完全自动化开关"""
+        self.settings["shop_full_auto_nav"] = checked
+        settings_file = get_user_data_path("data/settings.json")
+        try:
+            data = {}
+            if os.path.exists(settings_file):
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["shop_full_auto_nav"] = checked
+            os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def _update_stop_condition_ui(self):
         """根据SL模式设置切换停止条件UI"""
@@ -214,6 +238,17 @@ class PageShop(QWidget):
         layout = QHBoxLayout(card)
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(12)
+
+        full_auto_label = QLabel("完全自动化:")
+        layout.addWidget(full_auto_label)
+        self.full_auto_switch = SwitchButton()
+        self.full_auto_switch.setChecked(
+            self.settings.get("shop_full_auto_nav", False)
+        )
+        self.full_auto_switch.checkedChanged.connect(self._save_full_auto_setting)
+        layout.addWidget(self.full_auto_switch)
+
+        layout.addSpacing(8)
 
         # 模式选择
         mode_label = QLabel("模式:")
@@ -647,14 +682,18 @@ class PageShop(QWidget):
         version = "new" if self.version_combo.currentIndex() == 0 else "old"
         stop_currency = int(self.currency_input.text() or "0")
 
-        # 获取商店三有效设置
-        settings_file = get_user_data_path("data/settings.json")
-        require_double = True  # 默认双有效
-        if os.path.exists(settings_file):
+        from core.match_config import get_required_positive_matches
 
+        settings_file = get_user_data_path("data/settings.json")
+        required_matches = 2
+        if os.path.exists(settings_file):
             with open(settings_file, "r", encoding="utf-8") as f:
                 settings = json.load(f)
-                require_double = settings.get("shop_require_double_valid", True)
+                required_matches = get_required_positive_matches(
+                    settings, for_shop=True
+                )
+
+        full_auto_nav = self.full_auto_switch.isChecked()
 
         # SL 模式参数
         sl_mode_enabled = self.settings.get("sl_mode_enabled", False)
@@ -662,30 +701,46 @@ class PageShop(QWidget):
         save_manager = None
         steam_id = ""
         backup_path = ""
+        baseline_log_msg = ""
 
-        # SL 模式：备份存档
-        if sl_mode_enabled and sl_qualified_target > 0:
+        # SL / 完全自动化：备份存档（完全自动化默认暗痕不足时读档重试）
+        if (sl_mode_enabled and sl_qualified_target > 0) or full_auto_nav:
             from core.save_manager import SaveManager
             steam_path = self.settings.get("steam_path", "")
             save_manager = SaveManager(steam_path)
             steam_id = save_manager.get_most_recent_user()
 
             if not steam_id:
-                InfoBar.error("错误", "未检测到Steam用户，无法使用合格遗物数量停止功能", parent=self)
+                err = (
+                    "未检测到 Steam 用户，无法使用合格遗物数量停止"
+                    if sl_mode_enabled
+                    else "未检测到 Steam 用户，完全自动化需要读档重试"
+                )
+                InfoBar.error("错误", err, parent=self)
                 return
 
-            # 备份存档
+            # 读档基线：保留时间最早的 sl_auto_backup，不在每次启动时覆盖
             backup_dir = os.path.join(save_manager.BACKUP_DIR, steam_id)
-            existing_path = os.path.join(backup_dir, "sl_auto_backup.sl2")
-            if os.path.exists(existing_path):
-                # 已有自动备份，覆盖更新
-                os.remove(existing_path)
-
-            success, msg = save_manager.backup_save(steam_id, "sl_auto_backup")
-            if not success:
-                InfoBar.error("错误", f"存档备份失败: {msg}", parent=self)
-                return
-            backup_path = existing_path
+            os.makedirs(backup_dir, exist_ok=True)
+            baseline_name = "sl_auto_backup"
+            backup_path = os.path.join(backup_dir, f"{baseline_name}.sl2")
+            baseline_log_msg = ""
+            if os.path.exists(backup_path):
+                baseline_log_msg = (
+                    "使用已有读档基线 sl_auto_backup（时间最早，读档重试不变）"
+                )
+            else:
+                success, msg = save_manager.backup_save(
+                    steam_id, baseline_name
+                )
+                if not success:
+                    InfoBar.error(
+                        "错误", f"存档基线备份失败: {msg}", parent=self
+                    )
+                    return
+                baseline_log_msg = (
+                    "已创建读档基线 sl_auto_backup；合格十连后将按词条另存备份"
+                )
 
         # 清空日志和统计
         self.logger.clear()
@@ -706,18 +761,28 @@ class PageShop(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
+        if baseline_log_msg:
+            self.logger.log(baseline_log_msg, "INFO")
+        if full_auto_nav:
+            self.logger.log(
+                "已启用完全自动化：导航进商店 → 购买到暗痕不足 → "
+                "读档重试（始终恢复 sl_auto_backup）→ 合格十连按词条备份",
+                "INFO",
+            )
+
         # 创建并启动线程
         self.shop_thread = ShopThread(
             self.shop_automation,
             mode,
             version,
             stop_currency,
-            require_double,
+            required_matches,
             sl_mode_enabled=sl_mode_enabled,
             sl_qualified_target=sl_qualified_target,
             save_manager=save_manager,
             steam_id=steam_id,
-            backup_path=backup_path
+            backup_path=backup_path,
+            full_auto_nav=full_auto_nav,
         )
         self.shop_thread.log_signal.connect(self._on_log)
         self.shop_thread.qualified_relic_signal.connect(self._add_qualified_relic)
